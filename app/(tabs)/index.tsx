@@ -1,98 +1,180 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
+// app/(tabs)/index.tsx
 
-import { HelloWave } from '@/components/hello-wave';
-import ParallaxScrollView from '@/components/parallax-scroll-view';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { Link } from 'expo-router';
+import React, { useState } from 'react';
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+} from 'react-native';
+import { useRouter } from 'expo-router';
+import { useStore } from '../../store/useStore';
+import { colors, commonStyles } from '../../styles/commonStyles';
+import { FilterType, Consultation } from '../../types/index';
+import { AddConsultationModal } from '../../components/AddConsultationModal';
+import { ConsultationCard } from '../../components/ConsultationCard';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 
-export default function HomeScreen() {
+
+export default function ConsultationsScreen() {
+  const router = useRouter();
+  const [filter, setFilter] = useState<FilterType>('All');
+  const [showAddModal, setShowAddModal] = useState(false);
+  const consultations = useStore((state) => state.consultations);
+  const setCurrentConsultation = useStore((state) => state.setCurrentConsultation);
+
+  const filteredConsultations = consultations.filter((c) => {
+    if (filter === 'All') return true;
+    return c.status === filter;
+  });
+
+  // const handleStartNext = () => {
+  //   const nextPending = consultations.find((c) => c.status === 'Pending');
+  //   if (nextPending) {
+  //     handleSelectConsultation(nextPending);
+  //   }
+  // };
+
+  const handleSelectConsultation = (consultation: Consultation) => {
+    setCurrentConsultation(consultation);
+    router.push('/consultation/consent');
+  };
+
   return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
-        <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 1: Try it</ThemedText>
-        <ThemedText>
-          Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
-          Press{' '}
-          <ThemedText type="defaultSemiBold">
-            {Platform.select({
-              ios: 'cmd + d',
-              android: 'cmd + m',
-              web: 'F12',
-            })}
-          </ThemedText>{' '}
-          to open developer tools.
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <Link href="/modal">
-          <Link.Trigger>
-            <ThemedText type="subtitle">Step 2: Explore</ThemedText>
-          </Link.Trigger>
-          <Link.Preview />
-          <Link.Menu>
-            <Link.MenuAction title="Action" icon="cube" onPress={() => alert('Action pressed')} />
-            <Link.MenuAction
-              title="Share"
-              icon="square.and.arrow.up"
-              onPress={() => alert('Share pressed')}
-            />
-            <Link.Menu title="More" icon="ellipsis">
-              <Link.MenuAction
-                title="Delete"
-                icon="trash"
-                destructive
-                onPress={() => alert('Delete pressed')}
-              />
-            </Link.Menu>
-          </Link.Menu>
-        </Link>
+    <SafeAreaView style={commonStyles.container}>
+      <View style={commonStyles.header}>
+        <View>
+          <Text style={commonStyles.headerTitle}>My Consultations</Text>
+          <Text style={styles.headerDate}>Today, 9 Dec 2025</Text>
+        </View>
+      </View>
 
-        <ThemedText>
-          {`Tap the Explore tab to learn more about what's included in this starter app.`}
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
-        <ThemedText>
-          {`When you're ready, run `}
-          <ThemedText type="defaultSemiBold">npm run reset-project</ThemedText> to get a fresh{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
-          <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
-      </ThemedView>
-    </ParallaxScrollView>
+      {/* Filters */}
+      <View style={styles.filterContainer}>
+        {(['All', 'Pending', 'Completed'] as FilterType[]).map((f) => (
+          <TouchableOpacity
+            key={f}
+            style={[styles.filterButton, filter === f && styles.filterButtonActive]}
+            onPress={() => setFilter(f)}
+          >
+            <Text
+              style={[
+                styles.filterButtonText,
+                filter === f && styles.filterButtonTextActive,
+              ]}
+            >
+              {f}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      
+      {/* <TouchableOpacity style={styles.startNextButton} onPress={handleStartNext}>
+        <Ionicons name="play" size={24} color="white" />
+        <Text style={styles.startNextButtonText}></Text>
+      </TouchableOpacity> */}
+
+      {/* Consultations List */}
+      <ScrollView style={styles.consultationsList}>
+        {filteredConsultations.map((consultation) => (
+          <ConsultationCard
+            key={consultation.id}
+            consultation={consultation}
+            onPress={() => handleSelectConsultation(consultation)}
+          />
+        ))}
+      </ScrollView>
+
+      {/* Add Consultation Button */}
+      <TouchableOpacity style={styles.fab} onPress={() => setShowAddModal(true)}>
+        <Ionicons name="add-sharp" size={24} color="white" />
+        <Text style={styles.fabText}>Start Consultation</Text>
+      </TouchableOpacity>
+
+      {/* Add Consultation Modal */}
+      <AddConsultationModal
+        visible={showAddModal}
+        onClose={() => setShowAddModal(false)}
+      />
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  titleContainer: {
+  headerDate: {
+    fontSize: 14,
+    color: colors.white,
+    marginTop: 4,
+  },
+  filterContainer: {
     flexDirection: 'row',
+    padding: 16,
+    gap: 8,
+  },
+  filterButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.gray[200],
+  },
+  filterButtonActive: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  filterButtonText: {
+    fontSize: 14,
+    color: colors.gray[500],
+  },
+  filterButtonTextActive: {
+    color: colors.white,
+    fontWeight: '600',
+  },
+  startNextButton: {
+    backgroundColor: colors.secondary,
+    margin: 16,
+    marginTop: 0,
+    padding: 16,
+    borderRadius: 8,
     alignItems: 'center',
-    gap: 8,
+    flexDirection:'row',
+    justifyContent:'center',
+    gap:4
   },
-  stepContainer: {
-    gap: 8,
-    marginBottom: 8,
+  startNextButtonText: {
+    color: colors.white,
+    fontSize: 16,
+    fontWeight: '600',
   },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
+  consultationsList: {
+    flex: 1,
+    paddingHorizontal: 16,
+  },
+  fab: {
     position: 'absolute',
+    bottom: 20,
+    right: 20,
+    backgroundColor: colors.primary,
+    flexDirection:'row',
+    alignItems:'center',
+    justifyContent:'center',
+    gap:2,
+    paddingHorizontal: 24,
+    paddingVertical: 16,
+    borderRadius: 30,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  fabText: {
+    color: colors.white,
+    fontSize: 16,
+    fontWeight: '600',
   },
 });
