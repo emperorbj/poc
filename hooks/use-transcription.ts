@@ -1,0 +1,357 @@
+// hooks/useTranscription.ts
+
+import { useState, useCallback, useRef, useEffect } from 'react';
+import { Platform, PermissionsAndroid } from 'react-native';
+import { transcriptionService, TranscriptionMessage } from '../services/transcriptionService';
+import { pcmAudioRecorder } from '../utils/pcmAudioRecorder';
+
+export interface TranscriptionResult {
+  id: string;
+  text: string;
+  isFinal: boolean;
+  confidence?: number;
+  speakerTag?: number;
+  timestamp: Date;
+}
+
+export interface UseTranscriptionResult {
+  isConnected: boolean;
+  isRecording: boolean;
+  transcriptions: TranscriptionResult[];
+  currentInterim: string;
+  error: string | null;
+  startTranscription: () => Promise<void>;
+  stopTranscription: () => Promise<void>;
+  clearTranscriptions: () => void;
+}
+
+const CHUNK_DURATION_MS = 2000; // Record 500ms chunks
+
+export function useTranscription(): UseTranscriptionResult {
+  const [isConnected, setIsConnected] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [transcriptions, setTranscriptions] = useState<TranscriptionResult[]>([]);
+  const [currentInterim, setCurrentInterim] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  const recordingLoopTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const isStoppingRef = useRef(false);
+  const currentRecordingPathRef = useRef<string | null>(null);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      cleanup();
+    };
+  }, []);
+
+  const connectWebSocket = useCallback(() => {
+    transcriptionService.connect({
+      onConnected: () => {
+        console.log('✅ WebSocket connected');
+        setIsConnected(true);
+        setError(null);
+      },
+      onDisconnected: () => {
+        console.log('🔌 WebSocket disconnected');
+        setIsConnected(false);
+      },
+      onTranscription: (message: TranscriptionMessage) => {
+        handleTranscription(message);
+      },
+      onError: (errorMsg: string) => {
+        console.error('❌ WebSocket error:', errorMsg);
+        setError(errorMsg);
+      },
+    });
+  }, []);
+
+  const handleTranscription = (message: TranscriptionMessage) => {
+    if (!message.transcript) return;
+
+    if (message.is_final) {
+      // Final transcription - add to list
+      const newTranscription: TranscriptionResult = {
+        id: Date.now().toString() + Math.random(),
+        text: message.transcript,
+        isFinal: true,
+        confidence: message.confidence,
+        speakerTag: message.speaker_tag,
+        timestamp: new Date(),
+      };
+
+      setTranscriptions(prev => [...prev, newTranscription]);
+      setCurrentInterim(''); // Clear interim
+      console.log('📝 Final transcription:', message.transcript);
+    } else {
+      // Interim transcription - update current
+      setCurrentInterim(message.transcript);
+      console.log('💬 Interim transcription:', message.transcript);
+    }
+  };
+
+  /**
+   * Request microphone permissions
+   */
+  const requestPermissions = async (): Promise<boolean> => {
+    try {
+      if (Platform.OS === 'android') {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+          {
+            title: 'Microphone Permission',
+            message: 'This app needs access to your microphone for transcription',
+            buttonNeutral: 'Ask Me Later',
+            buttonNegative: 'Cancel',
+            buttonPositive: 'OK',
+          }
+        );
+        return granted === PermissionsAndroid.RESULTS.GRANTED;
+      } else {
+        // iOS permissions are handled via Info.plist
+        // The library will request permissions automatically
+        return true;
+      }
+    } catch (err) {
+      console.error('❌ Error requesting permissions:', err);
+      return false;
+    }
+  };
+
+  const startRecordingChunk = async (): Promise<string | null> => {
+    try {
+      // Check if we should stop before starting
+      if (isStoppingRef.current) {
+        return null;
+      }
+
+      // Request permissions
+      const hasPermission = await requestPermissions();
+      if (!hasPermission) {
+        setError('Microphone permission not granted');
+        return null;
+      }
+
+      // Start PCM recording
+      const recordingPath = await pcmAudioRecorder.startRecording();
+      currentRecordingPathRef.current = recordingPath;
+      console.log('🎤 Started PCM recording chunk');
+
+      // Wait for chunk duration
+      await new Promise(resolve => setTimeout(resolve, CHUNK_DURATION_MS));
+
+      // Check again if we should stop
+      if (isStoppingRef.current) {
+        try {
+          await pcmAudioRecorder.stopRecording();
+        } catch (err) {
+          console.warn('⚠️ Error stopping recording (stop requested):', err);
+        }
+        currentRecordingPathRef.current = null;
+        return null;
+      }
+
+      // Stop recording and get file path
+      const filePath = await pcmAudioRecorder.stopRecording();
+      currentRecordingPathRef.current = null;
+      console.log('✅ Recorded PCM chunk:', filePath);
+      return filePath;
+    } catch (err) {
+      console.error('❌ Error recording PCM chunk:', err);
+      // Clean up if recording was started
+      if (currentRecordingPathRef.current) {
+        try {
+          await pcmAudioRecorder.stopRecording();
+        } catch (cleanupErr) {
+          // Ignore cleanup errors
+        }
+        currentRecordingPathRef.current = null;
+      }
+      return null;
+    }
+  };
+
+  const processAndSendChunk = async (filePath: string) => {
+    try {
+      // Read PCM file directly as ArrayBuffer (already in correct format)
+      const audioBuffer = await pcmAudioRecorder.readPCMFile(filePath);
+
+      // Validate buffer has data
+      if (audioBuffer.byteLength === 0) {
+        console.warn('⚠️ Empty PCM buffer, skipping');
+        await pcmAudioRecorder.deleteRecording(filePath);
+        return;
+      }
+
+      console.log('📦 PCM buffer size:', audioBuffer.byteLength, 'bytes');
+
+      // Send via WebSocket
+      if (transcriptionService.isConnected()) {
+        transcriptionService.sendAudio(audioBuffer);
+      } else {
+        console.warn('⚠️ WebSocket not connected, skipping chunk');
+      }
+
+      // Clean up file
+      await pcmAudioRecorder.deleteRecording(filePath);
+    } catch (err) {
+      console.error('❌ Error processing PCM chunk:', err);
+      // Try to clean up file even on error
+      try {
+        await pcmAudioRecorder.deleteRecording(filePath);
+      } catch (cleanupErr) {
+        // Ignore cleanup errors
+      }
+    }
+  };
+
+  const recordingLoop = async () => {
+    try {
+      while (!isStoppingRef.current) {
+        // Check before starting each chunk
+        if (isStoppingRef.current) {
+          break;
+        }
+
+        const uri = await startRecordingChunk();
+        
+        // Check again after recording (might have been stopped during recording)
+        if (isStoppingRef.current) {
+          break;
+        }
+        
+        if (uri) {
+          await processAndSendChunk(uri);
+        }
+
+        // Small delay between chunks (only if not stopping)
+        if (!isStoppingRef.current) {
+          await new Promise(resolve => setTimeout(resolve, 50));
+        } else {
+          break;
+        }
+      }
+      console.log('🛑 Recording loop ended');
+    } catch (error) {
+      console.error('❌ Error in recording loop:', error);
+      setError('Recording loop error: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      setIsRecording(false);
+    } finally {
+      // Ensure PCM recording is stopped
+      if (pcmAudioRecorder.getRecordingState() && currentRecordingPathRef.current) {
+        try {
+          const filePath = await pcmAudioRecorder.stopRecording();
+          await pcmAudioRecorder.deleteRecording(filePath);
+        } catch (err) {
+          // Ignore cleanup errors
+        }
+        currentRecordingPathRef.current = null;
+      }
+    }
+  };
+
+  const startTranscription = async () => {
+    try {
+      setError(null);
+      isStoppingRef.current = false;
+
+      // Connect WebSocket if not connected
+      if (!isConnected && !transcriptionService.isConnected()) {
+        console.log('🔌 Connecting WebSocket...');
+        connectWebSocket();
+        
+        // Wait for connection with timeout
+        let attempts = 0;
+        const maxAttempts = 10; // 5 seconds total
+        while (!transcriptionService.isConnected() && attempts < maxAttempts) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+          attempts++;
+        }
+      }
+
+      // Check connection status
+      if (!transcriptionService.isConnected()) {
+        const readyState = transcriptionService.getReadyState();
+        // WebSocket constants: 0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED
+        const stateMessage = readyState === null 
+          ? 'WebSocket not initialized'
+          : readyState === 0 // WebSocket.CONNECTING
+          ? 'Connection timeout'
+          : readyState === 2 // WebSocket.CLOSING
+          ? 'Connection closing'
+          : readyState === 3 // WebSocket.CLOSED
+          ? 'Connection closed'
+          : 'Connection failed';
+        setError(`Failed to connect to transcription service: ${stateMessage}`);
+        return;
+      }
+
+      // Start recording loop
+      setIsRecording(true);
+      console.log('🎙️ Starting transcription...');
+      
+      // Start recording loop (don't await - it runs continuously)
+      recordingLoop().catch((err) => {
+        console.error('❌ Recording loop error:', err);
+        setError('Recording error: ' + (err instanceof Error ? err.message : 'Unknown error'));
+        setIsRecording(false);
+      });
+    } catch (err) {
+      console.error('❌ Error starting transcription:', err);
+      const errorMessage = err instanceof Error ? err.message : 'Failed to start transcription';
+      setError(errorMessage);
+      setIsRecording(false);
+    }
+  };
+
+  const stopTranscription = async () => {
+    try {
+      console.log('⏹️ Stopping transcription...');
+      isStoppingRef.current = true;
+      setIsRecording(false);
+
+      // Stop current PCM recording if any
+      if (pcmAudioRecorder.getRecordingState() && currentRecordingPathRef.current) {
+        try {
+          await pcmAudioRecorder.stopRecording();
+          // Clean up the file
+          await pcmAudioRecorder.deleteRecording(currentRecordingPathRef.current);
+        } catch (err: any) {
+          console.warn('⚠️ Error stopping PCM recording:', err);
+        }
+        currentRecordingPathRef.current = null;
+      }
+
+      // Clear loop
+      if (recordingLoopTimeoutRef.current) {
+        clearTimeout(recordingLoopTimeoutRef.current);
+        recordingLoopTimeoutRef.current = null;
+      }
+
+      console.log('✅ Transcription stopped');
+    } catch (err) {
+      console.error('❌ Error stopping transcription:', err);
+    }
+  };
+
+  const cleanup = async () => {
+    await stopTranscription();
+    transcriptionService.disconnect();
+  };
+
+  const clearTranscriptions = () => {
+    setTranscriptions([]);
+    setCurrentInterim('');
+  };
+
+  return {
+    isConnected,
+    isRecording,
+    transcriptions,
+    currentInterim,
+    error,
+    startTranscription,
+    stopTranscription,
+    clearTranscriptions,
+  };
+}

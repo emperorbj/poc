@@ -1,4 +1,3 @@
-// app/consultation/consent.tsx
 
 import React from 'react';
 import { View, Text, TouchableOpacity, SafeAreaView, StyleSheet } from 'react-native';

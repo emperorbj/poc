@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Real-time Speech-to-Text</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+        #status {
+            padding: 12px;
+            border-radius: 5px;
+            margin: 20px 0;
+            font-weight: 500;
+        }
+        .connected { background-color: #d4edda; color: #155724; }
+        .disconnected { background-color: #f8d7da; color: #721c24; }
+        .recording { background-color: #fff3cd; color: #856404; }
+        button {
+            padding: 12px 24px;
+            font-size: 16px;
+            margin: 10px 5px;
+            cursor: pointer;
+            border: none;
+            border-radius: 5px;
+            font-weight: 500;
+            transition: all 0.3s;
+        }
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        #connectBtn {
+            background: #007bff;
+            color: white;
+        }
+        #connectBtn:hover:not(:disabled) {
+            background: #0056b3;
+        }
+        #startBtn {
+            background: #28a745;
+            color: white;
+        }
+        #startBtn:hover:not(:disabled) {
+            background: #218838;
+        }
+        #stopBtn {
+            background: #dc3545;
+            color: white;
+        }
+        #stopBtn:hover:not(:disabled) {
+            background: #c82333;
+        }
+        #transcriptions {
+            margin-top: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 5px;
+            min-height: 200px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .transcript {
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .interim {
+            background: #e9ecef;
+            color: #6c757d;
+            font-style: italic;
+        }
+        .final {
+            background: #d4edda;
+            color: #155724;
+            font-weight: 500;
+        }
+        .confidence {
+            font-size: 12px;
+            color: #6c757d;
+            margin-left: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Real-time Speech-to-Text</h1>
+        <div id="status" class="disconnected">Disconnected</div>
+        
+        <div>
+            <button id="connectBtn">Connect</button>
+            <button id="startBtn" disabled>Start Recording</button>
+            <button id="stopBtn" disabled>Stop Recording</button>
+        </div>
+        
+        <div id="transcriptions">
+            <p style="color: #6c757d; text-align: center;">Transcriptions will appear here...</p>
+        </div>
+    </div>
+    
+    <script>
+        let ws = null;
+        let mediaRecorder = null;
+        let audioContext = null;
+        let processorNode = null;
+        let streamSource = null;
+        
+        const status = document.getElementById('status');
+        const connectBtn = document.getElementById('connectBtn');
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const transcriptionsDiv = document.getElementById('transcriptions');
+        
+        let currentInterimElement = null;
+        
+        connectBtn.onclick = () => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.close();
+                return;
+            }
+            const url = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}//${window.location.host}/transcription/ws/transcribe`;
+            
+            ws = new WebSocket(url);
+            
+            ws.onopen = () => {
+                status.textContent = 'Connected';
+                status.className = 'connected';
+                connectBtn.textContent = 'Disconnect';
+                startBtn.disabled = false;
+                console.log('WebSocket connected');
+            };
+            
+            ws.onclose = () => {
+                status.textContent = 'Disconnected';
+                status.className = 'disconnected';
+                connectBtn.textContent = 'Connect';
+                startBtn.disabled = true;
+                stopBtn.disabled = true;
+                console.log('WebSocket disconnected');
+            };
+            
+            ws.onmessage = (event) => {
+                const message = JSON.parse(event.data);
+                
+                if (message.type === 'transcription') {
+                    displayTranscription(message);
+                } else if (message.type === 'error') {
+                    console.error('Server error:', message.message);
+                    alert('Error: ' + message.message);
+                }
+            };
+            
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+            };
+        };
+        
+        function displayTranscription(message) {
+            if (message.is_final) {
+                // Final transcription
+                if (currentInterimElement) {
+                    currentInterimElement.remove();
+                    currentInterimElement = null;
+                }
+                
+                const finalDiv = document.createElement('div');
+                finalDiv.className = 'transcript final';
+                // Add speaker label if available
+                let content = '';
+                if (message.speaker_tag) {
+                    content = `<strong>Speaker ${message.speaker_tag}:</strong> `;
+                }
+                content += message.transcript;
+                
+                if (message.confidence > 0) {
+                    content += `<span class="confidence">(${(message.confidence * 100).toFixed(1)}%)</span>`;
+                }
+                
+                finalDiv.innerHTML = content;             
+                transcriptionsDiv.appendChild(finalDiv);
+                transcriptionsDiv.scrollTop = transcriptionsDiv.scrollHeight;
+            } else {
+                // Interim transcription
+                if (!currentInterimElement) {
+                    currentInterimElement = document.createElement('div');
+                    currentInterimElement.className = 'transcript interim';
+                    transcriptionsDiv.appendChild(currentInterimElement);
+                }
+                currentInterimElement.textContent = message.transcript;
+                transcriptionsDiv.scrollTop = transcriptionsDiv.scrollHeight;
+            }
+        }
+        
+        startBtn.onclick = async () => {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: {
+                        channelCount: 1,
+                        sampleRate: 16000,
+                        echoCancellation: true,
+                        noiseSuppression: true
+                    } 
+                });
+                
+                audioContext = new AudioContext({ sampleRate: 16000 });
+                streamSource = audioContext.createMediaStreamSource(stream);
+                
+                // Create audio processor
+                await audioContext.audioWorklet.addModule(
+                    URL.createObjectURL(new Blob([`
+                        class AudioProcessor extends AudioWorkletProcessor {
+                            process(inputs, outputs, parameters) {
+                                const input = inputs[0];
+                                if (input.length > 0) {
+                                    const channelData = input[0];
+                                    const int16Data = new Int16Array(channelData.length);
+                                    for (let i = 0; i < channelData.length; i++) {
+                                        int16Data[i] = Math.max(-32768, Math.min(32767, channelData[i] * 32768));
+                                    }
+                                    this.port.postMessage(int16Data.buffer);
+                                }
+                                return true;
+                            }
+                        }
+                        registerProcessor('audio-processor', AudioProcessor);
+                    `], { type: 'application/javascript' }))
+                );
+                
+                processorNode = new AudioWorkletNode(audioContext, 'audio-processor');
+                
+                processorNode.port.onmessage = (event) => {
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(event.data);
+                    }
+                };
+                
+                streamSource.connect(processorNode);
+                processorNode.connect(audioContext.destination);
+                
+                status.textContent = 'Recording and transcribing...';
+                status.className = 'recording';
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+                
+                transcriptionsDiv.innerHTML = '';
+                
+            } catch (err) {
+                console.error('Error accessing microphone:', err);
+                alert('Could not access microphone: ' + err.message);
+            }
+        };
+        
+        stopBtn.onclick = () => {
+            if (processorNode) {
+                processorNode.disconnect();
+                streamSource.disconnect();
+                audioContext.close();
+                
+                status.textContent = 'Connected';
+                status.className = 'connected';
+                startBtn.disabled = false;
+                stopBtn.disabled = true;
+                
+                currentInterimElement = null;
+            }
+        };
+    </script>
+</body>
+</html>

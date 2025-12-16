@@ -16,6 +16,7 @@ import { FilterType, Consultation } from '../../types/index';
 import { AddConsultationModal } from '../../components/AddConsultationModal';
 import { ConsultationCard } from '../../components/ConsultationCard';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { HeaderTitle } from '@react-navigation/elements';
 
 
 export default function ConsultationsScreen() {
@@ -30,13 +31,6 @@ export default function ConsultationsScreen() {
     return c.status === filter;
   });
 
-  // const handleStartNext = () => {
-  //   const nextPending = consultations.find((c) => c.status === 'Pending');
-  //   if (nextPending) {
-  //     handleSelectConsultation(nextPending);
-  //   }
-  // };
-
   const handleSelectConsultation = (consultation: Consultation) => {
     setCurrentConsultation(consultation);
     router.push('/consultation/consent');
@@ -46,7 +40,7 @@ export default function ConsultationsScreen() {
     <SafeAreaView style={commonStyles.container}>
       <View style={commonStyles.header}>
         <View>
-          <Text style={commonStyles.headerTitle}>My Consultations</Text>
+          <Text style={[commonStyles.headerTitle,styles.HeaderTitle]}>My Consultations</Text>
           <Text style={styles.headerDate}>Today, 9 Dec 2025</Text>
         </View>
       </View>
@@ -108,6 +102,9 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: colors.white,
     marginTop: 4,
+  },
+  HeaderTitle:{
+    color:'#FFFFFF'
   },
   filterContainer: {
     flexDirection: 'row',

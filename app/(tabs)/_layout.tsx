@@ -2,8 +2,7 @@
 
 import { Tabs } from 'expo-router';
 import { colors } from '../../styles/commonStyles';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-
+import { Ionicons } from '@expo/vector-icons';
 
 export default function TabsLayout() {
   return (
@@ -38,11 +37,10 @@ export default function TabsLayout() {
 }
 
 function TabBarIcon({ name, color }: { name: string; color: string }) {
-  const iconNames:any = {
+  const iconNames: any = {
     home: 'medical',
     person: 'person',
   };
   
   return <Ionicons name={iconNames[name]} size={24} color={color} />;
 }
-
