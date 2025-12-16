@@ -3,7 +3,20 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { Platform, PermissionsAndroid } from 'react-native';
 import { transcriptionService, TranscriptionMessage } from '../services/transcriptionService';
-import { pcmAudioRecorder } from '../utils/pcmAudioRecorder';
+
+// Lazy import to prevent crashes on module load
+let pcmAudioRecorder: any = null;
+function getPCMAudioRecorder() {
+  if (!pcmAudioRecorder) {
+    try {
+      pcmAudioRecorder = require('../utils/pcmAudioRecorder').pcmAudioRecorder;
+    } catch (error) {
+      console.error('❌ Failed to load PCM audio recorder:', error);
+      throw new Error('Audio recorder module not available');
+    }
+  }
+  return pcmAudioRecorder;
+}
 
 export interface TranscriptionResult {
   id: string;
@@ -25,7 +38,7 @@ export interface UseTranscriptionResult {
   clearTranscriptions: () => void;
 }
 
-const CHUNK_DURATION_MS = 2000; // Record 500ms chunks
+const CHUNK_DURATION_MS = 1000; // Record 500ms chunks
 
 export function useTranscription(): UseTranscriptionResult {
   const [isConnected, setIsConnected] = useState(false);
@@ -37,6 +50,17 @@ export function useTranscription(): UseTranscriptionResult {
   const recordingLoopTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isStoppingRef = useRef(false);
   const currentRecordingPathRef = useRef<string | null>(null);
+
+  // Check if native module is available on mount
+  useEffect(() => {
+    try {
+      getPCMAudioRecorder();
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Audio recorder module not available';
+      console.error('❌ PCM Audio Recorder not available:', errorMsg);
+      setError(errorMsg);
+    }
+  }, []);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -133,7 +157,8 @@ export function useTranscription(): UseTranscriptionResult {
       }
 
       // Start PCM recording
-      const recordingPath = await pcmAudioRecorder.startRecording();
+      const recorder = getPCMAudioRecorder();
+      const recordingPath = await recorder.startRecording();
       currentRecordingPathRef.current = recordingPath;
       console.log('🎤 Started PCM recording chunk');
 
@@ -143,7 +168,8 @@ export function useTranscription(): UseTranscriptionResult {
       // Check again if we should stop
       if (isStoppingRef.current) {
         try {
-          await pcmAudioRecorder.stopRecording();
+          const stopRecorder = getPCMAudioRecorder();
+          await stopRecorder.stopRecording();
         } catch (err) {
           console.warn('⚠️ Error stopping recording (stop requested):', err);
         }
@@ -152,7 +178,8 @@ export function useTranscription(): UseTranscriptionResult {
       }
 
       // Stop recording and get file path
-      const filePath = await pcmAudioRecorder.stopRecording();
+      const stopRecorder = getPCMAudioRecorder();
+      const filePath = await stopRecorder.stopRecording();
       currentRecordingPathRef.current = null;
       console.log('✅ Recorded PCM chunk:', filePath);
       return filePath;
@@ -161,7 +188,8 @@ export function useTranscription(): UseTranscriptionResult {
       // Clean up if recording was started
       if (currentRecordingPathRef.current) {
         try {
-          await pcmAudioRecorder.stopRecording();
+          const cleanupRecorder = getPCMAudioRecorder();
+          await cleanupRecorder.stopRecording();
         } catch (cleanupErr) {
           // Ignore cleanup errors
         }
@@ -174,12 +202,14 @@ export function useTranscription(): UseTranscriptionResult {
   const processAndSendChunk = async (filePath: string) => {
     try {
       // Read PCM file directly as ArrayBuffer (already in correct format)
-      const audioBuffer = await pcmAudioRecorder.readPCMFile(filePath);
+      const recorder = getPCMAudioRecorder();
+      const audioBuffer = await recorder.readPCMFile(filePath);
 
       // Validate buffer has data
       if (audioBuffer.byteLength === 0) {
         console.warn('⚠️ Empty PCM buffer, skipping');
-        await pcmAudioRecorder.deleteRecording(filePath);
+        const deleteRecorder = getPCMAudioRecorder();
+        await deleteRecorder.deleteRecording(filePath);
         return;
       }
 
@@ -193,12 +223,14 @@ export function useTranscription(): UseTranscriptionResult {
       }
 
       // Clean up file
-      await pcmAudioRecorder.deleteRecording(filePath);
+      const deleteRecorder = getPCMAudioRecorder();
+      await deleteRecorder.deleteRecording(filePath);
     } catch (err) {
       console.error('❌ Error processing PCM chunk:', err);
       // Try to clean up file even on error
       try {
-        await pcmAudioRecorder.deleteRecording(filePath);
+        const recorder = getPCMAudioRecorder();
+        await recorder.deleteRecording(filePath);
       } catch (cleanupErr) {
         // Ignore cleanup errors
       }
@@ -238,14 +270,19 @@ export function useTranscription(): UseTranscriptionResult {
       setIsRecording(false);
     } finally {
       // Ensure PCM recording is stopped
-      if (pcmAudioRecorder.getRecordingState() && currentRecordingPathRef.current) {
-        try {
-          const filePath = await pcmAudioRecorder.stopRecording();
-          await pcmAudioRecorder.deleteRecording(filePath);
-        } catch (err) {
-          // Ignore cleanup errors
+      try {
+        const recorder = getPCMAudioRecorder();
+        if (recorder.getRecordingState() && currentRecordingPathRef.current) {
+          try {
+            const filePath = await recorder.stopRecording();
+            await recorder.deleteRecording(filePath);
+          } catch (err) {
+            // Ignore cleanup errors
+          }
+          currentRecordingPathRef.current = null;
         }
-        currentRecordingPathRef.current = null;
+      } catch (err) {
+        // Ignore if recorder not available
       }
     }
   };
@@ -311,15 +348,20 @@ export function useTranscription(): UseTranscriptionResult {
       setIsRecording(false);
 
       // Stop current PCM recording if any
-      if (pcmAudioRecorder.getRecordingState() && currentRecordingPathRef.current) {
-        try {
-          await pcmAudioRecorder.stopRecording();
-          // Clean up the file
-          await pcmAudioRecorder.deleteRecording(currentRecordingPathRef.current);
-        } catch (err: any) {
-          console.warn('⚠️ Error stopping PCM recording:', err);
+      try {
+        const recorder = getPCMAudioRecorder();
+        if (recorder.getRecordingState() && currentRecordingPathRef.current) {
+          try {
+            await recorder.stopRecording();
+            // Clean up the file
+            await recorder.deleteRecording(currentRecordingPathRef.current);
+          } catch (err: any) {
+            console.warn('⚠️ Error stopping PCM recording:', err);
+          }
+          currentRecordingPathRef.current = null;
         }
-        currentRecordingPathRef.current = null;
+      } catch (err) {
+        // Ignore if recorder not available
       }
 
       // Clear loop

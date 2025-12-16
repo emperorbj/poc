@@ -1,10 +1,27 @@
 // utils/pcmAudioRecorder.ts
 
-import AudioRecorderPlayer from 'react-native-audio-recorder-player';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Platform } from 'react-native';
 
-const audioRecorderPlayer = new AudioRecorderPlayer();
+// Lazy import to prevent crashes if native module isn't available
+let AudioRecorderPlayer: any = null;
+let audioRecorderPlayer: any = null;
+
+// Initialize the native module lazily
+function getAudioRecorderPlayer() {
+  if (!AudioRecorderPlayer) {
+    try {
+      AudioRecorderPlayer = require('react-native-audio-recorder-player').default;
+      if (!audioRecorderPlayer) {
+        audioRecorderPlayer = new AudioRecorderPlayer();
+      }
+    } catch (error) {
+      console.error('❌ Failed to load react-native-audio-recorder-player:', error);
+      throw new Error('Audio recorder module not available. Please ensure the native module is properly linked.');
+    }
+  }
+  return audioRecorderPlayer;
+}
 
 /**
  * PCM Audio Recorder for real-time transcription
@@ -51,7 +68,8 @@ export class PCMAudioRecorder {
         AVLinearPCMIsFloatKeyIOS: false, // Integer PCM
       };
 
-      const uri = await audioRecorderPlayer.startRecorder(this.recordingPath, audioSet);
+      const recorder = getAudioRecorderPlayer();
+      const uri = await recorder.startRecorder(this.recordingPath, audioSet);
       this.isRecording = true;
       
       console.log('✅ PCM recording started:', uri);
@@ -72,7 +90,8 @@ export class PCMAudioRecorder {
     }
 
     try {
-      const result = await audioRecorderPlayer.stopRecorder();
+      const recorder = getAudioRecorderPlayer();
+      const result = await recorder.stopRecorder();
       this.isRecording = false;
       
       console.log('✅ PCM recording stopped:', result);

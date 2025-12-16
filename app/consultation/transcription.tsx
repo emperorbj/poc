@@ -25,12 +25,13 @@ export default function TranscriptionScreen() {
   const currentConsultation = useStore((state) => state.currentConsultation);
   const updateConsultation = useStore((state) => state.updateConsultation);
 
+  // Hooks must be called unconditionally
   const {
     isConnected,
     isRecording,
     transcriptions,
     currentInterim,
-    error,
+    error: transcriptionError,
     startTranscription,
     stopTranscription,
     clearTranscriptions,
@@ -39,6 +40,28 @@ export default function TranscriptionScreen() {
   if (!currentConsultation) {
     router.back();
     return null;
+  }
+
+  // Show error if module initialization failed
+  if (transcriptionError && transcriptionError.includes('not available')) {
+    return (
+      <SafeAreaView style={commonStyles.container}>
+        <View style={commonStyles.centerContent}>
+          <Text style={[commonStyles.headerTitle, { color: colors.danger, marginBottom: 16 }]}>
+            Initialization Error
+          </Text>
+          <Text style={[commonStyles.label, { textAlign: 'center', marginBottom: 24 }]}>
+            {transcriptionError}
+          </Text>
+          <Text style={[commonStyles.label, { textAlign: 'center', marginBottom: 24, fontSize: 12, color: colors.gray[600] }]}>
+            Please ensure the app was built with native modules properly linked. Run 'npx expo prebuild --clean' before building.
+          </Text>
+          <TouchableOpacity style={commonStyles.button} onPress={() => router.back()}>
+            <Text style={commonStyles.buttonText}>Go Back</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
   }
 
   const handleStartRecording = async () => {
@@ -82,14 +105,14 @@ export default function TranscriptionScreen() {
   };
 
   const getStatusText = () => {
-    if (error) return '⚠️ Error';
+    if (transcriptionError) return '⚠️ Error';
     if (isRecording) return '🔴 Recording & Transcribing...';
     if (isConnected) return '🟢 Connected';
     return '⚪ Ready';
   };
 
   const getStatusColor = () => {
-    if (error) return colors.danger;
+    if (transcriptionError) return colors.danger;
     if (isRecording) return colors.warning;
     if (isConnected) return colors.secondary;
     return colors.gray[500];
@@ -119,11 +142,11 @@ export default function TranscriptionScreen() {
         )}
 
         {/* Error Display */}
-        {error && (
+        {transcriptionError && (
           <View style={[styles.infoBox, styles.errorBox]}>
             <Ionicons name="alert-circle" size={24} color={colors.danger} />
             <Text style={[styles.infoText, { color: colors.danger }]}>
-              {error}
+              {transcriptionError}
             </Text>
           </View>
         )}
