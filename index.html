@@ -131,7 +131,7 @@
                 ws.close();
                 return;
             }
-            const url = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}//${window.location.host}/transcription/ws/transcribe`;
+            const url = `wss://meera-bot-v2.onrender.com/api/v1/transcription/ws/transcribe`;
             
             ws = new WebSocket(url);
             
