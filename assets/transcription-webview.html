@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Transcription WebView</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: transparent;
+        }
+        /* Hide UI elements - we'll control from React Native */
+        .container {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <script>
+        // This HTML runs in a WebView and uses Web Audio API to capture PCM audio
+        // It sends transcriptions back to React Native via postMessage
+        
+        let ws = null;
+        let audioContext = null;
+        let processorNode = null;
+        let streamSource = null;
+        let mediaStream = null;
+        let isRecording = false;
+
+        // Function to send messages to React Native
+        function sendToReactNative(type, data) {
+            if (window.ReactNativeWebView) {
+                window.ReactNativeWebView.postMessage(JSON.stringify({
+                    type: type,
+                    data: data
+                }));
+            }
+        }
+
+        // Connect to WebSocket
+        function connectWebSocket() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                return;
+            }
+
+            const url = 'wss://meera-bot-v2.onrender.com/api/v1/transcription/ws/transcribe';
+            ws = new WebSocket(url);
+
+            ws.onopen = () => {
+                console.log('WebSocket connected');
+                sendToReactNative('connected', {});
+            };
+
+            ws.onclose = () => {
+                console.log('WebSocket disconnected');
+                sendToReactNative('disconnected', {});
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const message = JSON.parse(event.data);
+                    
+                    if (message.type === 'transcription') {
+                        // Send transcription to React Native
+                        sendToReactNative('transcription', {
+                            transcript: message.transcript,
+                            is_final: message.is_final,
+                            confidence: message.confidence,
+                            speaker_tag: message.speaker_tag
+                        });
+                    } else if (message.type === 'error') {
+                        sendToReactNative('error', {
+                            message: message.message
+                        });
+                    }
+                } catch (err) {
+                    console.error('Error parsing message:', err);
+                }
+            };
+
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                sendToReactNative('error', {
+                    message: 'WebSocket connection error'
+                });
+            };
+        }
+
+        // Start recording
+        async function startRecording() {
+            if (isRecording) {
+                return;
+            }
+
+            try {
+                // Request microphone access
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: {
+                        channelCount: 1,
+                        sampleRate: 16000,
+                        echoCancellation: true,
+                        noiseSuppression: true
+                    } 
+                });
+
+                mediaStream = stream;
+                audioContext = new AudioContext({ sampleRate: 16000 });
+                streamSource = audioContext.createMediaStreamSource(stream);
+
+                // Create audio processor using AudioWorklet
+                await audioContext.audioWorklet.addModule(
+                    URL.createObjectURL(new Blob([`
+                        class AudioProcessor extends AudioWorkletProcessor {
+                            process(inputs, outputs, parameters) {
+                                const input = inputs[0];
+                                if (input.length > 0) {
+                                    const channelData = input[0];
+                                    const int16Data = new Int16Array(channelData.length);
+                                    for (let i = 0; i < channelData.length; i++) {
+                                        int16Data[i] = Math.max(-32768, Math.min(32767, channelData[i] * 32768));
+                                    }
+                                    this.port.postMessage(int16Data.buffer);
+                                }
+                                return true;
+                            }
+                        }
+                        registerProcessor('audio-processor', AudioProcessor);
+                    `], { type: 'application/javascript' }))
+                );
+
+                processorNode = new AudioWorkletNode(audioContext, 'audio-processor');
+
+                processorNode.port.onmessage = (event) => {
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(event.data);
+                    }
+                };
+
+                streamSource.connect(processorNode);
+                processorNode.connect(audioContext.destination);
+
+                isRecording = true;
+                sendToReactNative('recordingStarted', {});
+                console.log('Recording started');
+            } catch (err) {
+                console.error('Error starting recording:', err);
+                sendToReactNative('error', {
+                    message: 'Could not access microphone: ' + err.message
+                });
+            }
+        }
+
+        // Stop recording
+        function stopRecording() {
+            if (!isRecording) {
+                return;
+            }
+
+            try {
+                if (processorNode) {
+                    processorNode.disconnect();
+                }
+                if (streamSource) {
+                    streamSource.disconnect();
+                }
+                if (audioContext) {
+                    audioContext.close();
+                }
+                if (mediaStream) {
+                    mediaStream.getTracks().forEach(track => track.stop());
+                }
+
+                processorNode = null;
+                streamSource = null;
+                audioContext = null;
+                mediaStream = null;
+                isRecording = false;
+
+                sendToReactNative('recordingStopped', {});
+                console.log('Recording stopped');
+            } catch (err) {
+                console.error('Error stopping recording:', err);
+            }
+        }
+
+        // Disconnect WebSocket
+        function disconnectWebSocket() {
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+        }
+
+        // Listen for messages from React Native
+        window.addEventListener('message', (event) => {
+            try {
+                const command = JSON.parse(event.data);
+                
+                switch (command.action) {
+                    case 'connect':
+                        connectWebSocket();
+                        break;
+                    case 'disconnect':
+                        disconnectWebSocket();
+                        break;
+                    case 'startRecording':
+                        startRecording();
+                        break;
+                    case 'stopRecording':
+                        stopRecording();
+                        break;
+                }
+            } catch (err) {
+                console.error('Error handling message from React Native:', err);
+            }
+        });
+
+        // Initialize - connect WebSocket automatically
+        connectWebSocket();
+    </script>
+</body>
+</html>
+

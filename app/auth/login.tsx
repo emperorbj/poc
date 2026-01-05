@@ -55,7 +55,7 @@ export default function LoginScreen() {
       >
         <ScrollView contentContainerStyle={commonStyles.scrollContent}>
           <View style={styles.logoPlaceholder}>
-            <Image style={styles.logo} source={require('../../assets/images/new-logo.png')} />
+            <Image style={styles.logo} source={require('../../assets/images/logo.png')} />
           </View>
           <Text style={styles.appName}>Humaein</Text>
           <Text style={styles.tagline}>Patients before Paperwork</Text>

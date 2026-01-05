@@ -216,7 +216,7 @@ export const useStore = create<AppState>((set, get) => ({
         throw new Error('No access token available');
       }
 
-      // Map experience text to number
+      // Map experience text to number, then convert to string (API expects string)
       const experienceMap: Record<string, number> = {
         'Less than 1 year': 0,
         '1-3 years': 2,
@@ -229,11 +229,11 @@ export const useStore = create<AppState>((set, get) => ({
 
       const experienceNumber = experienceMap[details.yearsOfExperience] || 0;
 
-      // Prepare API request
+      // Prepare API request - API expects experience as string
       const updateData: UpdateProfileRequest = {
         clinic_name: details.clinicName,
         medical_registration_number: details.medicalRegistrationNumber,
-        experience: experienceNumber,
+        experience: String(experienceNumber), // Convert to string as API expects
         location: details.locationName,
       };
 
@@ -259,7 +259,18 @@ export const useStore = create<AppState>((set, get) => ({
       console.log('✅ Profile saved to storage and state');
     } catch (error) {
       console.error('❌ Error saving profile:', error);
-      throw error;
+      
+      // Ensure we throw a proper Error with a message
+      if (error instanceof Error) {
+        throw error;
+      }
+      
+      // If it's not an Error, create one with a meaningful message
+      const errorMessage = error && typeof error === 'object' 
+        ? JSON.stringify(error) 
+        : String(error || 'Failed to save profile');
+      
+      throw new Error(errorMessage);
     }
   },
 

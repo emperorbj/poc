@@ -11,7 +11,7 @@
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSMicrophoneUsageDescription": "This app needs access to your microphone for transcription"
+        "NSMicrophoneUsageDescription": "This app needs access to your microphone to stream audio."
       }
     },
     "android": {
@@ -27,7 +27,9 @@
       "permissions": [
         "android.permission.RECORD_AUDIO",
         "android.permission.WRITE_EXTERNAL_STORAGE",
-        "android.permission.READ_EXTERNAL_STORAGE"
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MICROPHONE"
       ]
     },
     "web": {
@@ -49,12 +51,13 @@
         }
       ],
       [
-        "expo-av",
+        "expo-audio",
         {
           "microphonePermission": "Allow Humaein to access your microphone for consultation recording."
         }
       ],
-      "expo-secure-store"
+      "expo-secure-store",
+      "@siteed/expo-audio-studio"
     ],
     "experiments": {
       "typedRoutes": true,

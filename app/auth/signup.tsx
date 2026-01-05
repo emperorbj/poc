@@ -95,7 +95,7 @@ export default function SignupScreen() {
       >
         <ScrollView contentContainerStyle={commonStyles.scrollContent}>
           <View style={styles.logoPlaceholder}>
-            <Image style={styles.logo} source={require('../../assets/images/new-logo.png')} />
+            <Image style={styles.logo} source={require('../../assets/images/logo.png')} />
           </View>
           <Text style={styles.appName}>Create Account</Text>
           <Text style={styles.tagline}>Join Humaein to get started</Text>

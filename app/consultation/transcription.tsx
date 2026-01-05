@@ -1,6 +1,6 @@
 
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -15,7 +15,8 @@ import { useRouter } from 'expo-router';
 import { useStore } from '../../store/useStore';
 import { colors, commonStyles } from '../../styles/commonStyles';
 import { Ionicons } from '@expo/vector-icons';
-import { useTranscription } from '../../hooks/use-transcription';
+// Use expo-audio-studio for real-time PCM streaming
+import { useTranscriptionAudioStudio } from '../../hooks/use-transcription-audio-studio';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { ViewStyle, TextStyle } from 'react-native';
 
@@ -25,7 +26,7 @@ export default function TranscriptionScreen() {
   const currentConsultation = useStore((state) => state.currentConsultation);
   const updateConsultation = useStore((state) => state.updateConsultation);
 
-  // Hooks must be called unconditionally
+  // Use expo-audio-studio for real-time PCM streaming
   const {
     isConnected,
     isRecording,
@@ -35,33 +36,16 @@ export default function TranscriptionScreen() {
     startTranscription,
     stopTranscription,
     clearTranscriptions,
-  } = useTranscription();
+  } = useTranscriptionAudioStudio();
+  
+  // Log which implementation is being used
+  useEffect(() => {
+    console.log('🎙️ Using transcription method: expo-audio-studio');
+  }, []);
 
   if (!currentConsultation) {
     router.back();
     return null;
-  }
-
-  // Show error if module initialization failed
-  if (transcriptionError && transcriptionError.includes('not available')) {
-    return (
-      <SafeAreaView style={commonStyles.container}>
-        <View style={commonStyles.centerContent}>
-          <Text style={[commonStyles.headerTitle, { color: colors.danger, marginBottom: 16 }]}>
-            Initialization Error
-          </Text>
-          <Text style={[commonStyles.label, { textAlign: 'center', marginBottom: 24 }]}>
-            {transcriptionError}
-          </Text>
-          <Text style={[commonStyles.label, { textAlign: 'center', marginBottom: 24, fontSize: 12, color: colors.gray[600] }]}>
-            Please ensure the app was built with native modules properly linked. Run 'npx expo prebuild --clean' before building.
-          </Text>
-          <TouchableOpacity style={commonStyles.button} onPress={() => router.back()}>
-            <Text style={commonStyles.buttonText}>Go Back</Text>
-          </TouchableOpacity>
-        </View>
-      </SafeAreaView>
-    );
   }
 
   const handleStartRecording = async () => {

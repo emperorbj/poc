@@ -1,111 +1,4 @@
-// // services/authService.ts
 
-// import { API_BASE_URL, API_ENDPOINTS } from '../config/api';
-// import { 
-//   SignupRequest, 
-//   LoginRequest, 
-//   RefreshRequest, 
-//   AuthResponse, 
-//   RefreshResponse 
-// } from '../types';
-
-// class AuthService {
-//   async signup(data: SignupRequest): Promise<AuthResponse> {
-//     try {
-//       const response = await fetch(`${API_BASE_URL}${API_ENDPOINTS.SIGNUP}`, {
-//         method: 'POST',
-//         headers: {
-//           'Content-Type': 'application/json',
-//           'Accept': 'application/json',
-//         },
-//         body: JSON.stringify(data),
-//       });
-
-//       if (!response.ok) {
-//         const error = await response.json();
-//         throw new Error(error.detail || 'Signup failed');
-//       }
-
-//       return await response.json();
-//     } catch (error) {
-//       console.error('Signup error:', error);
-//       throw error;
-//     }
-//   }
-
-//   async login(data: LoginRequest): Promise<AuthResponse> {
-//     try {
-//       const response = await fetch(`${API_BASE_URL}${API_ENDPOINTS.LOGIN}`, {
-//         method: 'POST',
-//         headers: {
-//           'Content-Type': 'application/json',
-//           'Accept': 'application/json',
-//         },
-//         body: JSON.stringify(data),
-//       });
-
-//       if (!response.ok) {
-//         const error = await response.json();
-//         throw new Error(error.detail || 'Login failed');
-//       }
-
-//       return await response.json();
-//     } catch (error) {
-//       console.error('Login error:', error);
-//       throw error;
-//     }
-//   }
-
-// async logout(refreshToken: string): Promise<void> {
-//     try {
-//       const response = await fetch(`${API_BASE_URL}${API_ENDPOINTS.LOGOUT}`, {
-//         method: 'POST',
-//         headers: {
-//           'Content-Type': 'application/json',
-//           'Accept': 'application/json',
-//         },
-//         body: JSON.stringify({ refresh_token: refreshToken }),
-//       });
-
-//       if (!response.ok) {
-//         console.warn('Logout warning:', await response.text());
-//       }
-//     } catch (error) {
-//       console.error('Logout error:', error);
-//       // Don't throw - allow local logout even if API fails
-//     }
-//   }
-
-//   async refreshToken(refreshToken: string): Promise<RefreshResponse> {
-//     try {
-//       const response = await fetch(`${API_BASE_URL}${API_ENDPOINTS.REFRESH}`, {
-//         method: 'POST',
-//         headers: {
-//           'Content-Type': 'application/json',
-//           'Accept': 'application/json',
-//         },
-//         body: JSON.stringify({ refresh_token: refreshToken }),
-//       });
-
-//       if (!response.ok) {
-//         const error = await response.json();
-//         throw new Error(error.detail || 'Token refresh failed');
-//       }
-
-//       return await response.json();
-//     } catch (error) {
-//       console.error('Token refresh error:', error);
-//       throw error;
-//     }
-//   }
-// }
-
-// export const authService = new AuthService();
-
-
-
-
-// services/authService.ts
 
 import { API_BASE_URL, API_ENDPOINTS } from '../config/api';
 import { 
@@ -117,9 +10,11 @@ import {
 } from '../types';
 
 export interface UpdateProfileRequest {
-  clinic_name?: string;
+  name?: string;
+  specialty?: string;
+  clinic_name?: string; // Note: API may accept this as an alias or custom field
   medical_registration_number?: string;
-  experience?: number;
+  experience?: string | number; // API expects string, we'll convert number to string
   location?: string;
 }
 
@@ -152,7 +47,28 @@ class AuthService {
         throw new Error(error.detail || 'Signup failed');
       }
 
-      return await response.json();
+      const apiResponse = await response.json();
+      
+      // API returns 'user' but our code expects 'doctor' - map it
+      const userData = apiResponse.user || apiResponse.doctor;
+      
+      // Normalize the user data to match our expected structure
+      const normalizedDoctor = {
+        ...userData,
+        // Handle experience - API might return as string, convert to number
+        experience: typeof userData.experience === 'string' 
+          ? parseInt(userData.experience, 10) || null 
+          : userData.experience,
+        // Ensure clinic_name exists (might be null/undefined from API)
+        clinic_name: userData.clinic_name || null,
+      };
+      
+      return {
+        access_token: apiResponse.access_token,
+        refresh_token: apiResponse.refresh_token,
+        token_type: 'bearer',
+        doctor: normalizedDoctor,
+      };
     } catch (error) {
       console.error('Signup error:', error);
       throw error;
@@ -175,7 +91,28 @@ class AuthService {
         throw new Error(error.detail || 'Login failed');
       }
 
-      return await response.json();
+      const apiResponse = await response.json();
+      
+      // API returns 'user' but our code expects 'doctor' - map it
+      const userData = apiResponse.user || apiResponse.doctor;
+      
+      // Normalize the user data to match our expected structure
+      const normalizedDoctor = {
+        ...userData,
+        // Handle experience - API might return as string, convert to number
+        experience: typeof userData.experience === 'string' 
+          ? parseInt(userData.experience, 10) || null 
+          : userData.experience,
+        // Ensure clinic_name exists (might be null/undefined from API)
+        clinic_name: userData.clinic_name || null,
+      };
+      
+      return {
+        access_token: apiResponse.access_token,
+        refresh_token: apiResponse.refresh_token,
+        token_type: 'bearer',
+        doctor: normalizedDoctor,
+      };
     } catch (error) {
       console.error('Login error:', error);
       throw error;
@@ -184,13 +121,14 @@ class AuthService {
 
   async logout(refreshToken: string): Promise<void> {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/v1${API_ENDPOINTS.LOGOUT}`, {
+      // API expects refresh_token as query parameter, not in body
+      const url = `${API_BASE_URL}/api/v1${API_ENDPOINTS.LOGOUT}?refresh_token=${encodeURIComponent(refreshToken)}`;
+      
+      const response = await fetch(url, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
           'Accept': 'application/json',
         },
-        body: JSON.stringify({ refresh_token: refreshToken }),
       });
 
       if (!response.ok) {
@@ -229,37 +167,86 @@ class AuthService {
     data: UpdateProfileRequest
   ): Promise<DoctorProfile> {
     try {
-      // Build query parameters from the data
-      const queryParams = new URLSearchParams();
+      const url = `${API_BASE_URL}/api/v1/auth/profile`;
+      const requestBody = JSON.stringify(data);
       
-      if (data.clinic_name) queryParams.append('clinic_name', data.clinic_name);
-      if (data.medical_registration_number) {
-        queryParams.append('medical_registration_number', data.medical_registration_number);
-      }
-      if (data.experience !== undefined) {
-        queryParams.append('experience', data.experience.toString());
-      }
-      if (data.location) queryParams.append('location', data.location);
-
-      const url = `${API_BASE_URL}/api/v1/auth/profile?${queryParams.toString()}`;
-
+      console.log('📤 Updating profile:', {
+        url,
+        data,
+        hasAccessToken: !!accessToken,
+      });
+      
+      // API expects JSON body, not query parameters
       const response = await fetch(url, {
         method: 'PATCH',
         headers: {
+          'Content-Type': 'application/json',
           'Accept': 'application/json',
           'Authorization': `Bearer ${accessToken}`,
         },
+        body: requestBody,
+      });
+      
+      console.log('📥 Profile update response:', {
+        status: response.status,
+        statusText: response.statusText,
+        ok: response.ok,
       });
 
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.detail || 'Profile update failed');
+        let errorMessage = 'Profile update failed';
+        
+        try {
+          const errorData = await response.json();
+          
+          // Handle validation errors (422) - extract detail array
+          if (errorData.detail && Array.isArray(errorData.detail)) {
+            const errorMessages = errorData.detail.map((err: any) => {
+              const field = err.loc?.join('.') || 'field';
+              return `${field}: ${err.msg}`;
+            });
+            errorMessage = errorMessages.join('\n');
+          } else if (errorData.detail) {
+            errorMessage = typeof errorData.detail === 'string' 
+              ? errorData.detail 
+              : JSON.stringify(errorData.detail);
+          } else if (errorData.message) {
+            errorMessage = errorData.message;
+          }
+        } catch (parseError) {
+          // If JSON parsing fails, try to get text
+          try {
+            const errorText = await response.text();
+            errorMessage = errorText || `HTTP ${response.status}: ${response.statusText}`;
+          } catch (textError) {
+            errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+          }
+        }
+        
+        console.error('Profile update failed:', {
+          status: response.status,
+          statusText: response.statusText,
+          errorMessage,
+        });
+        
+        throw new Error(errorMessage);
       }
 
       return await response.json();
     } catch (error) {
-      console.error('Profile update error:', error);
-      throw error;
+      // If it's already an Error with a message, re-throw it
+      if (error instanceof Error) {
+        console.error('Profile update error:', error.message);
+        throw error;
+      }
+      
+      // Otherwise, create a proper error message
+      const errorMessage = error && typeof error === 'object' 
+        ? JSON.stringify(error) 
+        : String(error || 'Unknown error occurred');
+      
+      console.error('Profile update error:', errorMessage);
+      throw new Error(errorMessage);
     }
   }
 }

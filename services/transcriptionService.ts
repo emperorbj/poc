@@ -56,7 +56,7 @@ class TranscriptionService {
       }
 
       // Use WSS for secure connection
-      const wsUrl = 'wss://meera-bot-v2.onrender.com/api/v1/transcription/ws/transcribe';
+      const wsUrl = 'wss://meera-bot.onrender.com/api/v1/transcription/ws/transcribe';
       
       console.log('🔌 Connecting to WebSocket:', wsUrl);
       
@@ -196,9 +196,9 @@ class TranscriptionService {
     }
 
     try {
-      // Send binary data directly
-      // Note: Server expects raw PCM Int16 audio, but we're sending M4A files
-      // This might cause the server to close the connection
+      // Send binary data directly as raw PCM Int16 audio
+      // With expo-audio-studio, we receive base64-encoded PCM16 (native) or Float32Array (web)
+      // and convert to ArrayBuffer - exactly what the server expects!
       console.log('📤 Sending audio chunk:', {
         size: audioBuffer.byteLength,
         readyState: this.ws.readyState,

@@ -129,7 +129,13 @@ export const tokenStorage = {
 
   async setDoctorData(doctor: any): Promise<void> {
     try {
-      await SecureStore.setItemAsync(DOCTOR_KEY, JSON.stringify(doctor));
+      if (!doctor) {
+        console.warn('⚠️ Attempted to save null/undefined doctor data');
+        return;
+      }
+      
+      const doctorString = typeof doctor === 'string' ? doctor : JSON.stringify(doctor);
+      await SecureStore.setItemAsync(DOCTOR_KEY, doctorString);
       console.log('💾 Doctor data saved to SecureStore');
     } catch (error) {
       console.error('Error saving doctor data:', error);
@@ -149,7 +155,13 @@ export const tokenStorage = {
 
   async setTenantDetails(tenantDetails: any): Promise<void> {
     try {
-      await SecureStore.setItemAsync(TENANT_KEY, JSON.stringify(tenantDetails));
+      if (!tenantDetails) {
+        console.warn('⚠️ Attempted to save null/undefined tenant details');
+        return;
+      }
+      
+      const tenantString = typeof tenantDetails === 'string' ? tenantDetails : JSON.stringify(tenantDetails);
+      await SecureStore.setItemAsync(TENANT_KEY, tenantString);
       console.log('💾 Tenant details saved to SecureStore');
     } catch (error) {
       console.error('Error saving tenant details:', error);
@@ -169,7 +181,9 @@ export const tokenStorage = {
 
   async setProfileComplete(isComplete: boolean): Promise<void> {
     try {
-      await SecureStore.setItemAsync(PROFILE_COMPLETE_KEY, JSON.stringify(isComplete));
+      // Boolean can be converted to string directly, but JSON.stringify is safer
+      const statusString = JSON.stringify(isComplete);
+      await SecureStore.setItemAsync(PROFILE_COMPLETE_KEY, statusString);
       console.log('💾 Profile complete status saved:', isComplete);
     } catch (error) {
       console.error('Error saving profile complete status:', error);

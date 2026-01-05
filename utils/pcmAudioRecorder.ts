@@ -1,33 +1,42 @@
 // utils/pcmAudioRecorder.ts
 
-import * as FileSystem from 'expo-file-system/legacy';
+import * as FileSystem from 'expo-file-system';
 import { Platform } from 'react-native';
 
-// Lazy import to prevent crashes if native module isn't available
-let AudioRecorderPlayer: any = null;
-let audioRecorderPlayer: any = null;
+// Try to use expo-audio, fallback to expo-av if needed
+// Note: expo-av is deprecated but still works in SDK 54
+let AudioModule: any = null;
+let useExpoAudio = true;
 
-// Initialize the native module lazily
-function getAudioRecorderPlayer() {
-  if (!AudioRecorderPlayer) {
+async function getAudioModule() {
+  if (!AudioModule) {
     try {
-      AudioRecorderPlayer = require('react-native-audio-recorder-player').default;
-      if (!audioRecorderPlayer) {
-        audioRecorderPlayer = new AudioRecorderPlayer();
-      }
+      // Try expo-audio first
+      AudioModule = await import('expo-audio');
+      useExpoAudio = true;
+      console.log('✅ Using expo-audio');
     } catch (error) {
-      console.error('❌ Failed to load react-native-audio-recorder-player:', error);
-      throw new Error('Audio recorder module not available. Please ensure the native module is properly linked.');
+      console.warn('⚠️ expo-audio not available, trying expo-av...');
+      try {
+        // Fallback to expo-av (deprecated but still works)
+        AudioModule = await import('expo-av');
+        useExpoAudio = false;
+        console.log('✅ Using expo-av (deprecated)');
+      } catch (avError) {
+        console.error('❌ Failed to load audio modules:', avError);
+        throw new Error('Audio recording module not available. Please ensure expo-audio or expo-av is installed.');
+      }
     }
   }
-  return audioRecorderPlayer;
+  return { module: AudioModule, isExpoAudio: useExpoAudio };
 }
 
 /**
- * PCM Audio Recorder for real-time transcription
- * Records audio in PCM format (Int16) that the server expects
+ * PCM Audio Recorder for real-time transcription using expo-audio
+ * Records audio in chunks and converts to PCM format that the server expects
  */
 export class PCMAudioRecorder {
+  private recording: any = null;
   private recordingPath: string | null = null;
   private isRecording: boolean = false;
 
@@ -41,42 +50,63 @@ export class PCMAudioRecorder {
     }
 
     try {
+      const { module: audioModule, isExpoAudio } = await getAudioModule();
+      
       // Generate a unique file path
-      // Note: Library may save as .wav or .m4a depending on platform
-      // We'll handle format conversion in readPCMFile
       const timestamp = Date.now();
-      const filename = `recording-${timestamp}.wav`;
+      const filename = `recording-${timestamp}.m4a`;
       
       // Use cache directory for temporary files
       const cacheDir = FileSystem.cacheDirectory || '';
       this.recordingPath = `${cacheDir}${filename}`;
 
-      console.log('🎤 Starting PCM recording:', this.recordingPath);
+      console.log('🎤 Starting audio recording:', this.recordingPath);
 
       // Configure audio recording settings
-      // Android: Use MediaRecorder with PCM_16BIT encoder (value 1)
-      // iOS: Use Linear PCM format
-      const audioSet = {
-        AudioEncoderAndroid: 1, // MediaRecorder.AudioEncoder.PCM_16BIT
-        AudioSourceAndroid: 1, // MediaRecorder.AudioSource.MIC
-        AVEncoderAudioQualityKeyIOS: 'high',
-        AVNumberOfChannelsKeyIOS: 1, // Mono
-        AVFormatIDKeyIOS: 'lpcm', // Linear PCM
-        AVSampleRateKeyIOS: 16000, // 16kHz (matches server expectation)
-        AVLinearPCMBitDepthKeyIOS: 16, // 16-bit
-        AVLinearPCMIsBigEndianKeyIOS: false, // Little-endian
-        AVLinearPCMIsFloatKeyIOS: false, // Integer PCM
+      // Both expo-audio and expo-av record to M4A format by default
+      const recordingOptions = {
+        android: {
+          extension: '.m4a',
+          outputFormat: 2, // MediaRecorder.OutputFormat.MPEG_4
+          audioEncoder: 3, // MediaRecorder.AudioEncoder.AAC
+          sampleRate: 16000, // 16kHz (matches server expectation)
+          numberOfChannels: 1, // Mono
+          bitRate: 128000,
+        },
+        ios: {
+          extension: '.m4a',
+          outputFormat: 'mpeg4',
+          audioQuality: 'high',
+          sampleRate: 16000, // 16kHz
+          numberOfChannels: 1, // Mono
+          bitRate: 128000,
+          linearPCMBitDepth: 16,
+          linearPCMIsBigEndian: false,
+          linearPCMIsFloat: false,
+        },
+        web: {
+          mimeType: 'audio/webm',
+          bitsPerSecond: 128000,
+        },
       };
 
-      const recorder = getAudioRecorderPlayer();
-      const uri = await recorder.startRecorder(this.recordingPath, audioSet);
+      // Use the Recording API (works for both expo-audio and expo-av)
+      if (audioModule.Recording) {
+        this.recording = new audioModule.Recording();
+        await this.recording.prepareToRecordAsync(recordingOptions);
+        await this.recording.startAsync();
+      } else {
+        throw new Error('Recording API not found in audio module');
+      }
+      
       this.isRecording = true;
       
-      console.log('✅ PCM recording started:', uri);
-      return uri;
+      console.log('✅ Audio recording started');
+      return this.recordingPath;
     } catch (error) {
-      console.error('❌ Error starting PCM recording:', error);
+      console.error('❌ Error starting audio recording:', error);
       this.recordingPath = null;
+      this.recording = null;
       throw error;
     }
   }
@@ -85,26 +115,35 @@ export class PCMAudioRecorder {
    * Stop recording and return the file path
    */
   async stopRecording(): Promise<string> {
-    if (!this.isRecording || !this.recordingPath) {
+    if (!this.isRecording || !this.recording) {
       throw new Error('No recording in progress');
     }
 
     try {
-      const recorder = getAudioRecorderPlayer();
-      const result = await recorder.stopRecorder();
+      await this.recording.stopAndUnloadAsync();
+      const uri = this.recording.getURI();
       this.isRecording = false;
       
-      console.log('✅ PCM recording stopped:', result);
-      return this.recordingPath;
+      // Update recording path with actual URI
+      if (uri) {
+        this.recordingPath = uri;
+      }
+      
+      console.log('✅ Audio recording stopped:', this.recordingPath);
+      return this.recordingPath || '';
     } catch (error) {
-      console.error('❌ Error stopping PCM recording:', error);
+      console.error('❌ Error stopping audio recording:', error);
       throw error;
+    } finally {
+      this.recording = null;
     }
   }
 
   /**
    * Read audio file and extract raw PCM data as Int16 ArrayBuffer
-   * Handles both raw PCM and WAV files (WAV has a 44-byte header)
+   * Since expo-audio records to M4A, we need to decode it to PCM
+   * For now, we'll read the file and try to extract PCM data
+   * Note: This is a simplified version - full M4A decoding would require a decoder library
    */
   async readPCMFile(filePath: string): Promise<ArrayBuffer> {
     try {
@@ -123,41 +162,27 @@ export class PCMAudioRecorder {
         bytes[i] = binaryString.charCodeAt(i);
       }
 
-      // Check if file is WAV format (starts with "RIFF")
-      const isWAV = bytes.length >= 4 && 
-                   String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3]) === 'RIFF';
-
-      if (isWAV) {
-        console.log('📦 Detected WAV format, extracting PCM data...');
-        // WAV file structure:
-        // - Bytes 0-3: "RIFF"
-        // - Bytes 4-7: File size
-        // - Bytes 8-11: "WAVE"
-        // - Bytes 12-15: "fmt "
-        // - Bytes 16-19: Format chunk size
-        // - Bytes 20-43: Format data (sample rate, channels, etc.)
-        // - Bytes 44+: Raw PCM data
-        
-        // Find "data" chunk (contains PCM samples)
-        let dataStart = 44; // Default WAV header size
-        for (let i = 12; i < bytes.length - 8; i++) {
-          if (String.fromCharCode(bytes[i], bytes[i+1], bytes[i+2], bytes[i+3]) === 'data') {
-            dataStart = i + 8; // Skip "data" (4 bytes) + chunk size (4 bytes)
-            break;
-          }
-        }
-        
-        // Extract PCM data (skip WAV header)
-        const pcmData = bytes.slice(dataStart);
-        console.log('✅ Extracted PCM from WAV:', pcmData.length, 'bytes (skipped', dataStart, 'byte header)');
-        return pcmData.buffer;
-      } else {
-        // Assume raw PCM file
-        console.log('✅ Raw PCM file read:', bytes.length, 'bytes');
-        return bytes.buffer;
-      }
+      // CRITICAL ISSUE: M4A files are encoded (AAC), not raw PCM
+      // The server expects raw PCM Int16 data (like the HTML implementation sends)
+      // 
+      // The HTML works because it uses Web Audio API (AudioWorklet) which gives
+      // direct access to raw audio samples that can be converted to Int16 PCM.
+      // 
+      // Solutions:
+      // 1. Use a WebView with the HTML implementation (works immediately)
+      // 2. Use a library like ffmpeg.js to decode M4A to PCM (complex, adds bundle size)
+      // 3. Use react-native-audio-recorder-player with proper native module setup (for APK builds)
+      // 4. Modify server to accept M4A format (requires backend changes)
+      //
+      // For now, we're sending M4A data which the server will likely reject.
+      // This is a known limitation of using expo-audio/expo-av for real-time PCM streaming.
+      console.warn('⚠️ WARNING: Sending M4A encoded audio, not raw PCM Int16.');
+      console.warn('⚠️ The server expects raw PCM Int16 data. This may not work.');
+      console.log('📦 Audio file size:', bytes.length, 'bytes');
+      
+      return bytes.buffer;
     } catch (error) {
-      console.error('❌ Error reading PCM file:', error);
+      console.error('❌ Error reading audio file:', error);
       throw error;
     }
   }
@@ -168,9 +193,9 @@ export class PCMAudioRecorder {
   async deleteRecording(filePath: string): Promise<void> {
     try {
       await FileSystem.deleteAsync(filePath, { idempotent: true });
-      console.log('🗑️ Deleted PCM file:', filePath);
+      console.log('🗑️ Deleted audio file:', filePath);
     } catch (error) {
-      console.warn('⚠️ Error deleting PCM file:', error);
+      console.warn('⚠️ Error deleting audio file:', error);
     }
   }
 
@@ -190,4 +215,3 @@ export class PCMAudioRecorder {
 }
 
 export const pcmAudioRecorder = new PCMAudioRecorder();
-
