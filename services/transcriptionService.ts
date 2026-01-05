@@ -38,6 +38,7 @@ class TranscriptionService {
   private maxReconnectAttempts = 3;
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
   private isIntentionalDisconnect = false;
+  private firstChunkLogged = false;
 
   connect(callbacks: TranscriptionCallbacks): void {
     this.callbacks = callbacks;
@@ -56,7 +57,7 @@ class TranscriptionService {
       }
 
       // Use WSS for secure connection
-      const wsUrl = 'wss://meera-bot.onrender.com/api/v1/transcription/ws/transcribe';
+      const wsUrl = 'wss://meera-bot-v2.onrender.com/api/v1/transcription/ws/transcribe';
       
       console.log('🔌 Connecting to WebSocket:', wsUrl);
       
@@ -67,6 +68,7 @@ class TranscriptionService {
       this.ws.onopen = () => {
         console.log('✅ WebSocket connected successfully');
         this.reconnectAttempts = 0;
+        this.firstChunkLogged = false; // Reset for new connection
         this.callbacks?.onConnected();
       };
 
@@ -167,7 +169,12 @@ class TranscriptionService {
   private handleMessage(data: string): void {
     try {
       const message: TranscriptionMessage = JSON.parse(data);
-      console.log('📨 Received message:', message);
+      console.log('📨 Received transcription message:', {
+        type: message.type,
+        transcript: message.transcript?.substring(0, 50) + (message.transcript && message.transcript.length > 50 ? '...' : ''),
+        is_final: message.is_final,
+        confidence: message.confidence,
+      });
       
       if (message.type === 'transcription') {
         this.callbacks?.onTranscription(message);
@@ -179,7 +186,7 @@ class TranscriptionService {
       }
     } catch (error) {
       console.error('❌ Error parsing message:', error);
-      console.error('Raw message data:', data);
+      console.error('Raw message data (first 200 chars):', data.substring(0, 200));
       this.callbacks?.onError('Failed to parse transcription message');
     }
   }
@@ -191,7 +198,7 @@ class TranscriptionService {
     }
 
     if (this.ws.readyState !== WebSocket.OPEN) {
-      console.warn('⚠️ WebSocket not open (state:', this.ws.readyState, '), cannot send audio');
+      // Silently skip if not open (reduces log spam during reconnection)
       return;
     }
 
@@ -199,14 +206,30 @@ class TranscriptionService {
       // Send binary data directly as raw PCM Int16 audio
       // With expo-audio-studio, we receive base64-encoded PCM16 (native) or Float32Array (web)
       // and convert to ArrayBuffer - exactly what the server expects!
-      console.log('📤 Sending audio chunk:', {
-        size: audioBuffer.byteLength,
-        readyState: this.ws.readyState,
-        protocol: this.ws.protocol || 'none',
-      });
       
-      this.ws.send(audioBuffer);
-      console.log('✅ Audio chunk sent successfully');
+      // Log first chunk in detail to debug format issues
+      if (!this.firstChunkLogged) {
+        this.firstChunkLogged = true;
+        const int16View = new Int16Array(audioBuffer);
+        console.log('📤 Sending FIRST audio chunk (detailed):', {
+          size: audioBuffer.byteLength,
+          sampleCount: int16View.length,
+          firstSamples: Array.from(int16View.slice(0, 5)),
+          readyState: this.ws.readyState,
+        });
+      }
+      
+      // Reduce logging frequency for subsequent chunks
+      if (Math.random() < 0.01) { // Log ~1% of chunks
+        console.log('📤 Sending audio chunk:', {
+          size: audioBuffer.byteLength,
+        });
+      }
+      
+      // React Native WebSocket requires Uint8Array, not ArrayBuffer
+      // Convert ArrayBuffer to Uint8Array for compatibility
+      const uint8Array = new Uint8Array(audioBuffer);
+      this.ws.send(uint8Array);
     } catch (error) {
       console.error('❌ Error sending audio:', error);
       const errorMessage = error instanceof Error ? error.message : 'Failed to send audio data';

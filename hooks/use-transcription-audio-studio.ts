@@ -62,6 +62,7 @@ export function useTranscriptionAudioStudio(): UseTranscriptionAudioStudioResult
   const [currentInterim, setCurrentInterim] = useState('');
   const [error, setError] = useState<string | null>(null);
   const isInitializedRef = useRef(false);
+  const firstChunkSentRef = useRef(false);
 
   // Use the audio recorder hook from expo-audio-studio
   const {
@@ -169,10 +170,22 @@ export function useTranscriptionAudioStudio(): UseTranscriptionAudioStudioResult
 
   const startTranscription = useCallback(async () => {
     try {
-      // Check WebSocket connection first
+      // Check WebSocket connection first - wait a bit if not connected yet
       if (!isConnected) {
-        setError('Not connected to transcription service. Please wait...');
-        return;
+        console.log('⏳ Waiting for WebSocket connection...');
+        // Wait up to 3 seconds for connection
+        let waited = 0;
+        while (!isConnected && waited < 3000) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+          waited += 100;
+        }
+        
+        if (!isConnected && !transcriptionService.isConnected()) {
+          setError('Not connected to transcription service. Please wait and try again.');
+          console.error('❌ WebSocket not connected after waiting');
+          return;
+        }
+        console.log('✅ WebSocket connection ready');
       }
 
       // Request microphone permission
@@ -191,6 +204,15 @@ export function useTranscriptionAudioStudio(): UseTranscriptionAudioStudioResult
             if (event.data instanceof Float32Array) {
               const pcm16 = float32ToPCM16(event.data);
               audioBuffer = pcm16.buffer;
+              // Log first few chunks to verify format
+              if (Math.random() < 0.01) { // Log ~1% of chunks
+                console.log('🎤 Web audio chunk:', {
+                  float32Length: event.data.length,
+                  pcm16Length: pcm16.length,
+                  bufferSize: audioBuffer.byteLength,
+                  sampleRate: 16000,
+                });
+              }
             } else {
               console.warn('⚠️ Unexpected data type on web:', typeof event.data);
               return;
@@ -198,8 +220,58 @@ export function useTranscriptionAudioStudio(): UseTranscriptionAudioStudioResult
           } else {
             // Native platforms (iOS/Android) provide base64-encoded PCM data
             if (typeof event.data === 'string') {
-              // The base64 data is already PCM Int16, just decode it
-              audioBuffer = base64ToArrayBuffer(event.data);
+              // The base64 data should be raw PCM Int16 (no WAV headers when output.primary.enabled = false)
+              // But we need to verify it's actually Int16 and in the correct byte order
+              const uint8Buffer = base64ToArrayBuffer(event.data);
+              
+              // Verify the buffer size matches eventDataSize (should be raw PCM)
+              audioBuffer = uint8Buffer;
+              if (event.eventDataSize && audioBuffer.byteLength !== event.eventDataSize) {
+                console.warn('⚠️ Buffer size mismatch:', {
+                  bufferSize: audioBuffer.byteLength,
+                  eventDataSize: event.eventDataSize,
+                  difference: audioBuffer.byteLength - event.eventDataSize,
+                });
+                
+                // If there's a mismatch, use only the expected size (might have padding)
+                if (audioBuffer.byteLength > event.eventDataSize) {
+                  audioBuffer = audioBuffer.slice(0, event.eventDataSize);
+                }
+              }
+              
+              // CRITICAL: Verify the data is actually Int16 PCM
+              // The base64 data from expo-audio-studio should be raw PCM Int16 in little-endian format
+              // We need to ensure it's sent as-is (already in correct format)
+              
+              // Log first chunk in detail to verify format
+              if (!firstChunkSentRef.current) {
+                const int16View = new Int16Array(audioBuffer);
+                console.log('🎤 First native audio chunk (detailed):', {
+                  base64Length: event.data.length,
+                  bufferSize: audioBuffer.byteLength,
+                  eventDataSize: event.eventDataSize,
+                  sampleCount: int16View.length,
+                  firstSample: int16View[0],
+                  lastSample: int16View[int16View.length - 1],
+                  minSample: Math.min(...Array.from(int16View.slice(0, 100))),
+                  maxSample: Math.max(...Array.from(int16View.slice(0, 100))),
+                  sampleRate: 16000,
+                  isEven: audioBuffer.byteLength % 2 === 0,
+                });
+                
+                // Verify sample range is reasonable for audio (-32768 to 32767)
+                const sampleRange = { min: Math.min(...Array.from(int16View.slice(0, 100))), max: Math.max(...Array.from(int16View.slice(0, 100))) };
+                if (sampleRange.min < -32768 || sampleRange.max > 32767) {
+                  console.warn('⚠️ Sample values out of Int16 range:', sampleRange);
+                }
+              }
+              
+              // Verify it's raw PCM (should be divisible by 2 for Int16)
+              if (audioBuffer.byteLength % 2 !== 0) {
+                console.warn('⚠️ Audio buffer size is not even - might include headers:', audioBuffer.byteLength);
+                // Trim to even size
+                audioBuffer = audioBuffer.slice(0, audioBuffer.byteLength - 1);
+              }
             } else {
               console.warn('⚠️ Unexpected data type on native:', typeof event.data);
               return;
@@ -207,13 +279,51 @@ export function useTranscriptionAudioStudio(): UseTranscriptionAudioStudioResult
           }
 
           // Send PCM16 audio directly to WebSocket
-          if (transcriptionService.isConnected()) {
-            transcriptionService.sendAudio(audioBuffer);
+          // Safety check: ensure audioBuffer is defined
+          if (!audioBuffer) {
+            console.warn('⚠️ Audio buffer is undefined, skipping chunk');
+            return;
+          }
+
+          const wsConnected = transcriptionService.isConnected();
+          const wsReadyState = transcriptionService.getReadyState();
+          
+          if (wsConnected) {
+            // Wait a bit before sending first chunk to ensure WebSocket is fully ready
+            if (!firstChunkSentRef.current) {
+              firstChunkSentRef.current = true;
+              console.log('📤 Sending first audio chunk (delayed 100ms for WebSocket stability)');
+              // Small delay to ensure WebSocket handshake is complete
+              // Capture audioBuffer in closure to ensure it's available
+              const bufferToSend = audioBuffer;
+              setTimeout(() => {
+                transcriptionService.sendAudio(bufferToSend);
+              }, 100);
+            } else {
+              transcriptionService.sendAudio(audioBuffer);
+            }
+          } else {
+            // Log occasionally if not connected (helps debug)
+            if (Math.random() < 0.01) {
+              console.warn('⚠️ WebSocket not connected, skipping audio chunk. ReadyState:', wsReadyState, 'isConnected state:', isConnected);
+            }
           }
         } catch (err) {
           console.error('❌ Error processing audio stream:', err);
         }
       };
+
+      // Verify WebSocket is connected before starting
+      if (!transcriptionService.isConnected()) {
+        const errorMsg = 'WebSocket is not connected. Please wait for connection before starting recording.';
+        console.error('❌', errorMsg, 'ReadyState:', transcriptionService.getReadyState());
+        setError(errorMsg);
+        Alert.alert('Connection Error', errorMsg);
+        return;
+      }
+
+      // Reset first chunk flag
+      firstChunkSentRef.current = false;
 
       // Start recording with streaming configuration
       await startRecording({
@@ -228,7 +338,7 @@ export function useTranscriptionAudioStudio(): UseTranscriptionAudioStudioResult
       });
 
       setError(null);
-      console.log('✅ Started audio streaming');
+      console.log('✅ Started audio streaming, WebSocket ready:', transcriptionService.isConnected());
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Failed to start recording';
       console.error('❌ Error starting transcription:', err);
